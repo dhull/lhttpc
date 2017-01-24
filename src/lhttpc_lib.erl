@@ -32,7 +32,7 @@
 
 -export([
         parse_url/1,
-        format_request/7,
+        format_request/9,
         header_value/2,
         header_value/3,
         normalize_method/1
@@ -42,6 +42,36 @@
 -export([format_hdrs/1, dec/1]).
 
 -include("lhttpc_types.hrl").
+-define(L(C),
+ case C of
+    $A -> $a;
+    $B -> $b;
+    $C -> $c;
+    $D -> $d;
+    $E -> $e;
+    $F -> $f;
+    $G -> $g;
+    $H -> $h;
+    $I -> $i;
+    $J -> $j;
+    $K -> $k;
+    $L -> $l;
+    $M -> $m;
+    $N -> $n;
+    $O -> $o;
+    $P -> $p;
+    $Q -> $q;
+    $R -> $r;
+    $S -> $s;
+    $T -> $t;
+    $U -> $u;
+    $V -> $v;
+    $W -> $w;
+    $X -> $x;
+    $Y -> $y;
+    $Z -> $z;
+    C  -> C
+  end).
 
 %% @spec header_value(Header, Headers) -> undefined | term()
 %% Header = string()
@@ -68,14 +98,23 @@ header_value(Hdr, Hdrs) ->
 %% @end
 -spec header_value(string(), [{string(), Value}], Default) ->
     Default | Value.
-header_value(Hdr, [{Hdr, Value} | _], _) ->
+header_value(Hdr, Hdrs, Default) ->
+  header_value_search(Hdr, Hdr, Hdrs, Default).
+
+header_value_search(Hdr, Hdr, [{Hdr, Value} | _], _) ->
     Value;
-header_value(Hdr, [{ThisHdr, Value}| Hdrs], Default) ->
-    case string:equal(string:to_lower(ThisHdr), Hdr) of
-        true  -> Value;
-        false -> header_value(Hdr, Hdrs, Default)
+header_value_search([], _Hdr, [{[], Value}| _Hdrs], _Default) ->
+    Value;
+header_value_search(_, Hdr, [{[], _}| Hdrs], Default) ->
+    header_value_search(Hdr, Hdr, Hdrs, Default);
+header_value_search([], Hdr, [_| Hdrs], Default) ->
+    header_value_search(Hdr, Hdr, Hdrs, Default);
+header_value_search([H0|Hdr0], Hdr, [{[H1|Hdr1], Value}| Hdrs], Default) ->
+    case H0 == ?L(H1) of
+        true  -> header_value_search(Hdr0, Hdr, [{Hdr1, Value}| Hdrs], Default);
+        false -> header_value_search(Hdr, Hdr, Hdrs, Default)
     end;
-header_value(_, [], Default) ->
+header_value_search(_, _Hdr, [], Default) ->
     Default.
 
 %% @spec (Item) -> OtherItem
@@ -151,11 +190,20 @@ split_port(Scheme, [P | T], Port) ->
 %% Port = integer()
 %% Body = iolist()
 %% PartialUpload = true | false
+%% IsContentLengthUnDefined = true | false
 -spec format_request(iolist(), atom() | string(), headers(), string(),
-    integer(), iolist(), true | false ) -> {true | false, iolist()}.
-format_request(Path, Method, Hdrs, Host, Port, Body, PartialUpload) ->
-    AllHdrs = add_mandatory_hdrs(Method, Hdrs, Host, Port, Body, PartialUpload),
-    IsChunked = is_chunked(AllHdrs),
+  integer(), iolist(), true | false, boolean() | 'undefined', boolean() | 'undefined') -> {true | false, iolist()}.
+format_request(Path, Method, Hdrs, Host, Port, Body, PartialUpload, IsContentLengthDefined, IsHostDefined) ->
+    {IsChunked, ContentHdrs} =
+        if
+            Method =/= "POST" andalso Method =/= "PUT" -> {false, Hdrs};
+            PartialUpload == false ->
+                {false, add_content_length(Hdrs, Body, IsContentLengthDefined)};
+            PartialUpload == true ->
+                add_transfer_encoding(Hdrs)
+        end,
+
+    AllHdrs = add_host(ContentHdrs, Host, Port, IsHostDefined),
     {
         IsChunked,
         [
@@ -203,42 +251,48 @@ format_body(Body, true) ->
             ]
     end.
 
-add_mandatory_hdrs(Method, Hdrs, Host, Port, Body, PartialUpload) ->
-    ContentHdrs = add_content_headers(Method, Hdrs, Body, PartialUpload),
-    add_host(ContentHdrs, Host, Port).
-
-add_content_headers("POST", Hdrs, Body, PartialUpload) ->
-    add_content_headers(Hdrs, Body, PartialUpload);
-add_content_headers("PUT", Hdrs, Body, PartialUpload) ->
-    add_content_headers(Hdrs, Body, PartialUpload);
-add_content_headers(_, Hdrs, _, _PartialUpload) ->
-    Hdrs.
-
-add_content_headers(Hdrs, Body, false) ->
+-spec add_content_length(Hdrs::headers(), Body::iolist(), IsContentLengthDefined::boolean()) -> headers().
+add_content_length(Hdrs, _Body, true) -> Hdrs;
+add_content_length(Hdrs, Body, false) -> add_content_length(Hdrs, Body);
+add_content_length(Hdrs, Body, undefined) ->
     case header_value("content-length", Hdrs) of
-        undefined ->
-            ContentLength = integer_to_list(iolist_size(Body)),
-            [{"Content-Length", ContentLength} | Hdrs];
-        _ -> % We have a content length
-            Hdrs
-    end;
-add_content_headers(Hdrs, _Body, true) ->
-    case {header_value("content-length", Hdrs),
-         header_value("transfer-encoding", Hdrs)} of
-        {undefined, undefined} ->
-            [{"Transfer-Encoding", "chunked"} | Hdrs];
-        {undefined, TransferEncoding} ->
-            case string:to_lower(TransferEncoding) of
-            "chunked" -> Hdrs;
-            _ -> erlang:error({error, unsupported_transfer_encoding})
-            end;
-        {_Length, undefined} ->
-            Hdrs;
-        {_Length, _TransferEncoding} -> %% have both cont.length and chunked
+        undefined -> add_content_length(Hdrs, Body);
+        _         -> Hdrs % We have a content length
+    end.
+
+add_content_length(Hdrs, Body) ->
+    ContentLength = integer_to_list(iolist_size(Body)),
+    [{"Content-Length", ContentLength} | Hdrs].
+
+
+-define(CHUNKED, true).
+-define(NOT_CHUNKED, false).
+-spec add_transfer_encoding(Hdrs::headers()) -> {IsChunked::boolean(), Hdrs::headers()}.
+add_transfer_encoding(Hdrs) ->
+    case {header_value("content-length", Hdrs), header_value("transfer-encoding", Hdrs)} of
+        {undefined, undefined}        -> {?CHUNKED, [{"Transfer-Encoding", "chunked"} | Hdrs]};
+        {undefined, TransferEncoding} -> {?CHUNKED, confirm_chunked(TransferEncoding, Hdrs)};
+        {_Length,   undefined}        -> {?NOT_CHUNKED, Hdrs};
+        _Else ->
+            %% Have both cont.length and chunked. This can happen
+            %% regardless of `is_content_length_defined' flag
             erlang:error({error, bad_header})
     end.
 
-add_host(Hdrs, Host, Port) ->
+-spec confirm_chunked(TransferEncoding::string(), Hdrs::headers()) -> Hdrs::headers().
+confirm_chunked(TransferEncoding, Hdrs) ->
+    case string:to_lower(TransferEncoding) of
+        "chunked" -> Hdrs;
+        _         -> erlang:error({error, unsupported_transfer_encoding})
+    end.
+
+
+-spec add_host(Hdrs::headers(), Host::host(), Port::non_neg_integer(), IsHostDefined::boolean()) ->
+  Hdrs::headers().
+add_host(Hdrs, _Host, _Port, true) -> Hdrs;
+add_host(Hdrs, Host, Port, false) ->
+    [{"Host", host(Host, Port) } | Hdrs];
+add_host(Hdrs, Host, Port, 'undefined') ->
     case header_value("host", Hdrs) of
         undefined ->
             [{"Host", host(Host, Port) } | Hdrs];
@@ -246,17 +300,11 @@ add_host(Hdrs, Host, Port) ->
             Hdrs
     end.
 
-is_chunked(Hdrs) ->
-    TransferEncoding = string:to_lower(
-        header_value("transfer-encoding", Hdrs, "undefined")),
-    case TransferEncoding of
-        "chunked" -> true;
-        _ -> false
-    end.
-
 -spec dec(timeout()) -> timeout().
 dec(Num) when is_integer(Num) -> Num - 1;
 dec(Else)                     -> Else.
 
+-spec host(Host::string(), Port::port()) -> Host::string() | list().
 host(Host, 80)   -> Host;
 host(Host, Port) -> [Host, $:, integer_to_list(Port)].
+

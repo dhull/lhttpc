@@ -24,14 +24,14 @@
 %%% ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 %%% ----------------------------------------------------------------------------
 
-%%% @author Oscar Hellström <oscar@hellstrom.st>
+%%% @author Oscar HellstrÃ¶m <oscar@hellstrom.st>
 %%% @doc Main interface to the lightweight http client.
 %%% See {@link request/4}, {@link request/5} and {@link request/6} functions.
 %%% @end
 -module(lhttpc).
 -behaviour(application).
 
--export([start/0, stop/0, request/4, request/5, request/6, request/9]).
+-export([start/0, stop/0, request/4, request/5, request/6, request/9, simple_request/8]).
 -export([start/2, stop/1]).
 -export([
         send_body_part/2,
@@ -47,7 +47,7 @@
 -include("lhttpc_types.hrl").
 
 -type result() :: {ok, {{pos_integer(), string()}, headers(), binary()}} |
-    {error, atom()}.
+    {error, term()}.
 
 %% @hidden
 -spec start(normal | {takeover, node()} | {failover, node()}, any()) ->
@@ -334,12 +334,17 @@ request(URL, Method, Hdrs, Body, Timeout, Options) ->
 %% lhttpc will never close the connection itself; it will only be
 %% closed by the other end or the TCP keepalive mechanism.
 %%
+%% `{is_content_length_defined, Bool}' and `{is_host_defined, Bool}'
+%% is used to skip lhttpc_lib:header_value/2,3.
+%% When boolean value is specified, there is no need to check if the
+%% value exists.
+%%
 %% @end
 -spec request(string(), 1..65535, true | false, string(), atom() | string(),
     headers(), iolist(), pos_integer(), [option()]) -> result().
 request(Host, Port, Ssl, Path, Method, Hdrs, Body, Timeout, Options) ->
     verify_options(Options, []),
-    ReqId = now(),
+    ReqId = erlang:unique_integer(),
     case proplists:is_defined(stream_to, Options) of
         true ->
             StreamTo = proplists:get_value(stream_to, Options),
@@ -355,6 +360,8 @@ request(Host, Port, Ssl, Path, Method, Hdrs, Body, Timeout, Options) ->
             Pid = spawn_link(lhttpc_client, request, Args),
             receive
                 {response, ReqId, Pid, R} ->
+                    %% all throw/1 and 'connection_closed', in addition to normal
+                    %% case is mapped here
                     R;
                 {exit, ReqId, Pid, Reason} ->
                     % We would rather want to exit here, instead of letting the
@@ -369,6 +376,40 @@ request(Host, Port, Ssl, Path, Method, Hdrs, Body, Timeout, Options) ->
             after Timeout ->
                 kill_client(Pid)
             end
+    end.
+
+%% @spec (Host, Port, Ssl, Path, Method, Hdrs, Body, Options) -> Result
+%%   Host = string()
+%%   Port = 1..65535
+%%   Ssl = boolean()
+%%   Path = string()
+%%   Method = atom() | string()
+%%   Hdrs = headers()
+%%   Body = iolist()
+%%   Options = [option()]
+%%   Result = result()
+%% @doc This interface does not support timeout, partial upload, and
+%% stream_to options. The check for `partial_upload' or `stream_to'
+%% is not performed, so users have to be aware of it.
+%% Host, Port, Ssl, and Path can be obtained using `lhttpc_lib:parse_url/1'.
+%% @end
+-spec simple_request(string(), 1..65535, true | false, string(), atom() | string(),
+    headers(), iolist(), [option()]) -> result().
+simple_request(Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
+    verify_options(Options, []),
+    ReqId = undefined, % ReqId is unnecessary here.
+    Self = undefined,  % self() is unnecessary here.
+    RetVal =
+        lhttpc_client:get_request_result(
+          ReqId, Self, Host, Port, Ssl, Path, Method, Hdrs, Body, Options
+        ),
+    case RetVal of
+        {response, _ReqId, _Self, Response} ->
+            %% success + throw/1 + 'connection_closed'
+            Response;
+        {exit, _ReqId, _Self, Reason} ->
+            %% error/1 runtime cases
+            exit(Reason)
     end.
 
 %% @spec (UploadState :: UploadState, BodyPart :: BodyPart) -> Result
@@ -596,6 +637,10 @@ verify_options([{connect_options, List} | Options], Errors)
         when is_list(List) ->
     verify_options(Options, Errors);
 verify_options([{stream_to, Pid} | Options], Errors) when is_pid(Pid) ->
+    verify_options(Options, Errors);
+verify_options([{is_content_length_defined, Bool} | Options], Errors) when is_boolean(Bool) ->
+    verify_options(Options, Errors);
+verify_options([{is_host_defined, Bool} | Options], Errors) when is_boolean(Bool) ->
     verify_options(Options, Errors);
 verify_options([Option | Options], Errors) ->
     verify_options(Options, [Option | Errors]);

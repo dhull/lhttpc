@@ -38,7 +38,7 @@ test_lookup_uncached () ->
 -define(SINGLE, {4, 0, 0, 0}).
 
 test_lookup () ->
-  meck:new(lhttpc_dns, [ passthrough ]),
+  meck:new(lhttpc_dns, [ passthrough, no_passthrough_cover ]),
   meck:expect(lhttpc_dns, lookup_uncached,
               fun(Host) ->
                   %% io:format(standard_error, "host: ~p~n", [ Host ]),
@@ -58,7 +58,7 @@ test_lookup () ->
   meck:expect(lhttpc_dns, os_timestamp,
               fun () -> { 0, erlang:get(dns_ts), 0 } end),
 
-  meck:new(random, [ passthrough, unstick ]),
+  meck:new(random, [ passthrough, unstick, no_passthrough_cover ]),
   meck:expect(random, uniform, fun (N) -> erlang:get(dns_random) rem N + 1 end),
 
   lhttpc_dns:reset_table(),

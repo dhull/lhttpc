@@ -54,3 +54,34 @@ parse_url_test_() ->
         ?_assertEqual({"host", 180, "?query", false},
             lhttpc_lib:parse_url("http://host:180?query"))
     ].
+
+
+header_value_test_() ->
+  Hdrs = [
+           {"Accept-Encoding","gzip"}
+          ,{"Access-Control-Allow-Methods","GET, POST, OPTIONS"}
+          ,{"Bid-Request-End-Time","1482516525448"}
+          ,{"Bid-Request-Start-Time","1482516525430"}
+          ,{"Content-Encoding","gzip"}
+          ,{"Content-Length","1034"}
+          ,{"Expires","Tue, 11 Oct 1977 12:34:56 GMT"}
+          ,{"Host","10.5.75.249"}
+          ,{"P3p","CP=\"NON DEVa PSAa PSDa OUR NOR NAV\",policyref=\"/w3c/p3p.xml\""}
+          ,{"X-Frame-Options","SAMEORIGIN"}
+          ,{"X-OpenX-Id","0050ac11-8170-189d-2915-5e00ce817498"}
+          ,{"X-OpenX-Rtb","b7f40ed1-c62a-11e6-bfe1-005056a21a26"}
+          ,{"accept","application/json"}
+          ,{"content-type","application/json"}
+          ,{"x-openrtb-version","2.4"}
+          ,{"ABCDEFGHIJKLMNOPQRSTUVWXYZ-","alpha-minus"}
+        ],
+  [
+        ?_assertEqual("1034",    lhttpc_lib:header_value("content-length", Hdrs, undefined))
+       ,?_assertEqual("10.5.75.249", lhttpc_lib:header_value("host", Hdrs, undefined))
+       ,?_assertEqual("CP=\"NON DEVa PSAa PSDa OUR NOR NAV\",policyref=\"/w3c/p3p.xml\"", lhttpc_lib:header_value("p3p", Hdrs, undefined))
+       ,?_assertEqual(undefined, lhttpc_lib:header_value("content", Hdrs, undefined))
+       ,?_assertEqual(undefined, lhttpc_lib:header_value("content-length1", Hdrs, undefined))
+       ,?_assertEqual(undefined, lhttpc_lib:header_value("content-length1", [], undefined))
+       ,?_assertEqual(undefined, lhttpc_lib:header_value([], [], undefined))
+       ,?_assertEqual("alpha-minus", lhttpc_lib:header_value("abcdefghijklmnopqrstuvwxyz-", Hdrs, undefined))
+  ].
